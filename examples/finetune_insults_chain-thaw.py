@@ -18,17 +18,20 @@ The 'chain-thaw' method does the following:
 from __future__ import print_function
 import example_helper
 import json
+import torch
 from torchmoji.model_def import torchmoji_transfer
-from torchmoji.global_variables import PRETRAINED_PATH
+from torchmoji.global_variables import PRETRAINED_PATH, ROOT_PATH
 from torchmoji.finetuning import (
      load_benchmark,
      finetune)
 
+device = torch.device('cuda:0')
 
-DATASET_PATH = '../data/kaggle-insults/raw.pickle'
+# DATASET_PATH = '../data/kaggle-insults/raw.pickle'
+DATASET_PATH = '{}/data/SS-Youtube/raw.pickle'.format(ROOT_PATH)
 nb_classes = 2
 
-with open('../model/vocabulary.json', 'r') as f:
+with open('{}/model/vocabulary.json'.format(ROOT_PATH), 'r') as f:
     vocab = json.load(f)
 
 # Load dataset. Extend the existing vocabulary with up to 10000 tokens from
@@ -37,8 +40,8 @@ data = load_benchmark(DATASET_PATH, vocab, extend_with=10000)
 
 # Set up model and finetune. Note that we have to extend the embedding layer
 # with the number of tokens added to the vocabulary.
-model = torchmoji_transfer(nb_classes, PRETRAINED_PATH, extend_embedding=data['added'])
+model = torchmoji_transfer(nb_classes, PRETRAINED_PATH, extend_embedding=data['added']).to(device)
 print(model)
 model, acc = finetune(model, data['texts'], data['labels'], nb_classes,
-                      data['batch_size'], method='chain-thaw')
+                      data['batch_size'], method='chain-thaw', device=device, dataset='SS-Youtube')
 print('Acc: {}'.format(acc))

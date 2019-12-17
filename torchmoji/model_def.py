@@ -205,7 +205,9 @@ class TorchMoji(nn.Module):
             input_lengths = input_seqs.batch_sizes
             packed_input = input_seqs
 
-        hidden = (Variable(ho, requires_grad=False), Variable(co, requires_grad=False))
+        # hidden = (Variable(ho, requires_grad=False), Variable(co, requires_grad=False))
+        # hidden = (ho.detach(), co.detach())
+        hidden = (ho.detach(), co.detach())
 
         # Embed with an activation function to bound the values of the embeddings
         x = self.embed(packed_input.data)
@@ -247,9 +249,9 @@ class TorchMoji(nn.Module):
 
         # Adapt return format if needed
         if return_tensor:
-            outputs = outputs.data
+            outputs = outputs
         if return_numpy:
-            outputs = outputs.data.numpy()
+            outputs = outputs.numpy()
 
         if self.return_attention:
             return outputs, att_weights

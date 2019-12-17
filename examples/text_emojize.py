@@ -52,6 +52,7 @@ if __name__ == "__main__":
     # Running predictions
     tokenized, _, _ = st.tokenize_sentences([args.text])
     # Get sentence probability
+
     prob = model(tokenized)[0]
 
     # Top emoji id

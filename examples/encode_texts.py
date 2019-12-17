@@ -5,6 +5,8 @@
 from __future__ import print_function, division, unicode_literals
 import json
 
+import example_helper
+
 from torchmoji.sentence_tokenizer import SentenceTokenizer
 from torchmoji.model_def import torchmoji_feature_encoding
 from torchmoji.global_variables import PRETRAINED_PATH, VOCAB_PATH

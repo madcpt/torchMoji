@@ -21,11 +21,23 @@ from torchmoji.finetuning import (
     load_benchmark,
     finetune)
 
+import argparse
+
+
+# add args
+parser = argparse.ArgumentParser(description='Fine-Tune')
+parser.add_argument('-ds','--dataset', help='dataset', required=True, default="SS-Youtube")
+parser.add_argument('-m','--method', help='method', required=True, default="last")
+parser.add_argument('-n','--nb_classes', help='nb_classes', required=True, default=2)
+
+args = vars(parser.parse_args())
+print(args)
+
 torch.autograd.set_detect_anomaly(True)
 
-DATASET_PATH = '{}/data/SS-Youtube/raw.pickle'.format(ROOT_PATH)
-# DATASET_PATH = '{}/data/SS-Twitter/raw.pickle'.format(ROOT_PATH)
-nb_classes = 2
+DATASET_PATH = '{}/data/{}/raw.pickle'.format(ROOT_PATH, args['dataset'])
+
+nb_classes = int(args['nb_classes'])
 
 with open(VOCAB_PATH, 'r') as f:
     vocab = json.load(f)
@@ -40,5 +52,8 @@ model = torchmoji_transfer(nb_classes, PRETRAINED_PATH).to(device)
 print(model)
 # print(torch.tensor(data['texts'][0], dtype=torch.int32))
 # print(torch.tensor(data['texts'][0].astype(np.int32)))
-model, acc = finetune(model, data['texts'], data['labels'], nb_classes, data['batch_size'], method='last', device=device)
+model, acc = finetune(model, data['texts'], data['labels'], nb_classes, data['batch_size'], method=args['method'], device=device, dataset=args['dataset'])
 print('Acc: {}'.format(acc))
+
+with open('{}/log/{}-{}-best.log'.format(ROOT_PATH, args['dataset'], args['method']), 'w') as f:
+    f.write('test: %.4f\n' % acc)

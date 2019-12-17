@@ -23,8 +23,8 @@ from torch.nn.utils import clip_grad_norm
 from sklearn.metrics import f1_score
 
 from torchmoji.global_variables import (FINETUNING_METHODS,
-                                               FINETUNING_METRICS,
-                                               WEIGHTS_DIR)
+                                        FINETUNING_METRICS,
+                                        WEIGHTS_DIR)
 from torchmoji.tokenizer import tokenize
 from torchmoji.sentence_tokenizer import SentenceTokenizer
 
@@ -108,6 +108,7 @@ def calculate_batchsize_maxlen(texts):
         Batch size,
         max length
     """
+
     def roundup(x):
         return int(math.ceil(x / 10.0)) * 10
 
@@ -115,9 +116,9 @@ def calculate_batchsize_maxlen(texts):
     # Adjust batch_size accordingly to prevent GPU overflow
     lengths = [len(tokenize(t)) for t in texts]
     maxlen = roundup(np.percentile(lengths, 80.0))
-    batch_size = 250 if maxlen <= 100 else 50
+    batch_size = 512 if maxlen <= 100 else 50
+    # TODO
     return batch_size, maxlen
-
 
 
 def freeze_layers(model, unfrozen_types=[], unfrozen_keyword=None):
@@ -133,7 +134,7 @@ def freeze_layers(model, unfrozen_types=[], unfrozen_keyword=None):
         Model with the selected layers frozen.
     """
     # Get trainable modules
-    trainable_modules = [(n, m) for n, m in model.named_children() if len([id(p) for p in m.parameters()]) !=  0]
+    trainable_modules = [(n, m) for n, m in model.named_children() if len([id(p) for p in m.parameters()]) != 0]
     for name, module in trainable_modules:
         trainable = (any(typ in str(module) for typ in unfrozen_types) or
                      (unfrozen_keyword is not None and unfrozen_keyword.lower() in name.lower()))
@@ -149,7 +150,7 @@ def change_trainable(module, trainable, verbose=False):
         trainable: Whether the layer should be frozen or unfrozen.
         verbose: Verbosity flag.
     """
-    
+
     if verbose: print('Changing MODULE', module, 'to trainable =', trainable)
     for name, param in module.named_parameters():
         if verbose: print('Setting weight', name, 'to trainable =', trainable)
@@ -197,7 +198,7 @@ def find_f1_threshold(model, val_gen, test_gen, average='binary'):
 
 def finetune(model, texts, labels, nb_classes, batch_size, method,
              metric='acc', epoch_size=5000, nb_epochs=1000, embed_l2=1E-6,
-             verbose=1):
+             verbose=1, device=torch.device('cpu'), dataset='None'):
     """ Compiles and finetunes the given pytorch model.
 
     # Arguments:
@@ -230,14 +231,14 @@ def finetune(model, texts, labels, nb_classes, batch_size, method,
                          'Available options: {}'.format(FINETUNING_METRICS))
 
     train_gen = get_data_loader(texts[0], labels[0], batch_size,
-                                extended_batch_sampler=True, epoch_size=epoch_size)
+                                extended_batch_sampler=True, epoch_size=epoch_size, device=device)
     val_gen = get_data_loader(texts[1], labels[1], batch_size,
-                              extended_batch_sampler=False)
+                              extended_batch_sampler=False, device=device)
     test_gen = get_data_loader(texts[2], labels[2], batch_size,
-                              extended_batch_sampler=False)
+                               extended_batch_sampler=False, device=device)
 
     checkpoint_path = '{}/torchmoji-checkpoint-{}.bin' \
-                      .format(WEIGHTS_DIR, str(uuid.uuid4()))
+        .format(WEIGHTS_DIR, str(uuid.uuid4()))
 
     if method in ['last', 'new']:
         lr = 0.001
@@ -245,10 +246,10 @@ def finetune(model, texts, labels, nb_classes, batch_size, method,
         lr = 0.0001
 
     loss_op = nn.BCEWithLogitsLoss() if nb_classes <= 2 \
-         else nn.CrossEntropyLoss()
+        else nn.CrossEntropyLoss()
 
     # Freeze layers if using last
-    if method == 'last':
+    if method in ['last', 'chain-thaw']:
         model = freeze_layers(model, unfrozen_keyword='output_layer')
 
     # Define optimizer, for chain-thaw we define it later (after freezing)
@@ -266,7 +267,7 @@ def finetune(model, texts, labels, nb_classes, batch_size, method,
             {'params': base_params},
             {'params': embed_params, 'weight_decay': embed_l2},
             {'params': output_layer_params, 'lr': 0.001},
-            ], lr=lr)
+        ], lr=lr)
 
     # Training
     if verbose:
@@ -274,18 +275,19 @@ def finetune(model, texts, labels, nb_classes, batch_size, method,
         print('Metric:  {}'.format(metric))
         print('Classes: {}'.format(nb_classes))
 
+    dataset = dataset + '-' + method
     if method == 'chain-thaw':
         result = chain_thaw(model, train_gen, val_gen, test_gen, nb_epochs, checkpoint_path, loss_op, embed_l2=embed_l2,
-                            evaluate=metric, verbose=verbose)
+                            evaluate=metric, verbose=verbose, dataset=dataset)
     else:
         result = tune_trainable(model, loss_op, adam, train_gen, val_gen, test_gen, nb_epochs, checkpoint_path,
-                                evaluate=metric, verbose=verbose)
+                                evaluate=metric, verbose=verbose, dataset=dataset)
     return model, result
 
 
 def tune_trainable(model, loss_op, optim_op, train_gen, val_gen, test_gen,
                    nb_epochs, checkpoint_path, patience=5, evaluate='acc',
-                   verbose=2):
+                   verbose=2, dataset='youtube'):
     """ Finetunes the given model using the accuracy measure.
 
     # Arguments:
@@ -303,7 +305,7 @@ def tune_trainable(model, loss_op, optim_op, train_gen, val_gen, test_gen,
         evaluate: Evaluation method to use. Can be 'acc' or 'weighted_f1'.
         verbose: Verbosity flag.
 
-    # Returns:
+    # Returns
         Accuracy of the trained model, ONLY if 'evaluate' is set.
     """
     if verbose:
@@ -314,7 +316,7 @@ def tune_trainable(model, loss_op, optim_op, train_gen, val_gen, test_gen,
         elif evaluate == 'weighted_f1':
             print("Evaluation on test set prior training:", evaluate_using_weighted_f1(model, test_gen, val_gen))
 
-    fit_model(model, loss_op, optim_op, train_gen, val_gen, nb_epochs, checkpoint_path, patience)
+    fit_model(model, loss_op, optim_op, train_gen, val_gen, nb_epochs, checkpoint_path, patience, dataset)
 
     # Reload the best weights found to avoid overfitting
     # Wait a bit to allow proper closing of weights file
@@ -365,18 +367,20 @@ def evaluate_using_acc(model, test_gen):
     for i, data in enumerate(test_gen):
         x, y = data
         outs = model(x)
+        y = y.view(-1)
         if model.nb_classes > 2:
             pred = torch.max(outs, 1)[1]
             acc = accuracy_score(y.squeeze().numpy(), pred.squeeze().numpy())
         else:
-            pred = (outs >= 0).long()
+            pred = (outs >= 0).long().view(-1)
             acc = (pred == y).double().sum() / len(pred)
-        accs.append(acc)
+        accs.append(acc.item())
     return np.mean(accs)
 
 
 def chain_thaw(model, train_gen, val_gen, test_gen, nb_epochs, checkpoint_path, loss_op,
-               patience=5, initial_lr=0.001, next_lr=0.0001, embed_l2=1E-6, evaluate='acc', verbose=1):
+               patience=5, initial_lr=0.001, next_lr=0.0001, embed_l2=1E-6, evaluate='acc', verbose=1,
+               dataset='youtube'):
     """ Finetunes given model using chain-thaw and evaluates using accuracy.
 
     # Arguments:
@@ -405,7 +409,7 @@ def chain_thaw(model, train_gen, val_gen, test_gen, nb_epochs, checkpoint_path, 
 
     # Train using chain-thaw
     train_by_chain_thaw(model, train_gen, val_gen, loss_op, patience, nb_epochs, checkpoint_path,
-                        initial_lr, next_lr, embed_l2, verbose)
+                        initial_lr, next_lr, embed_l2, verbose, dataset)
 
     if evaluate == 'acc':
         return evaluate_using_acc(model, test_gen)
@@ -414,7 +418,7 @@ def chain_thaw(model, train_gen, val_gen, test_gen, nb_epochs, checkpoint_path, 
 
 
 def train_by_chain_thaw(model, train_gen, val_gen, loss_op, patience, nb_epochs, checkpoint_path,
-                        initial_lr=0.001, next_lr=0.0001, embed_l2=1E-6, verbose=1):
+                        initial_lr=0.001, next_lr=0.0001, embed_l2=1E-6, verbose=1, dataset='youtube'):
     """ Finetunes model using the chain-thaw method.
 
     This is done as follows:
@@ -439,7 +443,7 @@ def train_by_chain_thaw(model, train_gen, val_gen, loss_op, patience, nb_epochs,
         verbose: Verbosity flag.
     """
     # Get trainable layers
-    layers = [m for m in model.children() if len([id(p) for p in m.parameters()]) !=  0]
+    layers = [m for m in model.children() if len([id(p) for p in m.parameters()]) != 0]
 
     # Bring last layer to front
     layers.insert(0, layers.pop(len(layers) - 1))
@@ -455,9 +459,6 @@ def train_by_chain_thaw(model, train_gen, val_gen, loss_op, patience, nb_epochs,
             lr = initial_lr
         elif lr == initial_lr:
             lr = next_lr
-
-        # Freeze all except current layer
-        for _layer in layers:
             if _layer is not None:
                 trainable = _layer == layer or layer is None
                 change_trainable(_layer, trainable=trainable, verbose=False)
@@ -478,10 +479,10 @@ def train_by_chain_thaw(model, train_gen, val_gen, loss_op, patience, nb_epochs,
         adam = optim.Adam([
             {'params': base_params},
             {'params': embed_parameters, 'weight_decay': embed_l2},
-            ], lr=lr)
+        ], lr=lr)
 
         fit_model(model, loss_op, adam, train_gen, val_gen, nb_epochs,
-                  checkpoint_path, patience)
+                  checkpoint_path, patience, dataset)
 
         # Reload the best weights found to avoid overfitting
         # Wait a bit to allow proper closing of weights file
@@ -499,7 +500,7 @@ def calc_loss(loss_op, pred, yv):
 
 
 def fit_model(model, loss_op, optim_op, train_gen, val_gen, epochs,
-              checkpoint_path, patience):
+              checkpoint_path, patience, dataset='youtube'):
     """ Analog to Keras fit_generator function.
 
     # Arguments:
@@ -521,15 +522,27 @@ def fit_model(model, loss_op, optim_op, train_gen, val_gen, epochs,
     torch.save(model.state_dict(), checkpoint_path)
 
     model.eval()
-    best_loss = np.mean([calc_loss(loss_op, model(Variable(xv)), Variable(yv)).data.cpu().numpy()[0] for xv, yv in val_gen])
+
+    # for xv, yv in val_gen:
+    #     print(loss_op, model(Variable(xv)), Variable(yv))
+    #     print(calc_loss(loss_op, model(Variable(xv)), Variable(yv)).data.cpu().numpy())
+    #     # calc_loss(loss_op, model(Variable(xv)), Variable(yv)).data.cpu().numpy()[0]
+    #     exit()
+    # best_loss = np.mean([calc_loss(loss_op, model(Variable(xv)), Variable(yv)).data.cpu().numpy()[0] for xv, yv in val_gen])
+    best_loss = np.mean(
+        [calc_loss(loss_op, model(Variable(xv)), Variable(yv)).data.cpu().numpy() for xv, yv in val_gen])
     print("original val loss", best_loss)
+
+    dev_log = './log/{}-dev.log'.format(dataset)
+    with open(dev_log, 'w') as f:
+        pass
 
     epoch_without_impr = 0
     for epoch in range(epochs):
         for i, data in enumerate(train_gen):
             X_train, y_train = data
-            X_train = Variable(X_train, requires_grad=False)
-            y_train = Variable(y_train, requires_grad=False)
+            X_train = X_train.detach()
+            y_train = y_train.detach()
             model.train()
             optim_op.zero_grad()
             output = model(X_train)
@@ -538,15 +551,20 @@ def fit_model(model, loss_op, optim_op, train_gen, val_gen, epochs,
             clip_grad_norm(model.parameters(), 1)
             optim_op.step()
 
-            acc = evaluate_using_acc(model, [(X_train.data, y_train.data)])
-            print("== Epoch", epoch, "step", i, "train loss", loss.data.cpu().numpy()[0], "train acc", acc)
+            acc = evaluate_using_acc(model, [(X_train, y_train)])
+            print("== Epoch", epoch, "step", i, "train loss", loss.data.cpu().numpy(), "train acc", acc)
 
         model.eval()
         acc = evaluate_using_acc(model, val_gen)
         print("val acc", acc)
 
-        val_loss = np.mean([calc_loss(loss_op, model(Variable(xv)), Variable(yv)).data.cpu().numpy()[0] for xv, yv in val_gen])
+        val_loss = np.mean(
+            [calc_loss(loss_op, model(Variable(xv)), Variable(yv)).data.cpu().numpy() for xv, yv in val_gen])
         print("val loss", val_loss)
+
+        with open(dev_log, 'a') as f:
+            f.write('%d\t%.4f\t%.4f\n' % (epoch, acc, val_loss))
+
         if best_loss is not None and val_loss >= best_loss:
             epoch_without_impr += 1
             print('No improvement over previous best loss: ', best_loss)
@@ -561,7 +579,9 @@ def fit_model(model, loss_op, optim_op, train_gen, val_gen, epochs,
         if epoch_without_impr >= patience:
             break
 
-def get_data_loader(X_in, y_in, batch_size, extended_batch_sampler=True, epoch_size=25000, upsample=False, seed=42):
+
+def get_data_loader(X_in, y_in, batch_size, extended_batch_sampler=True, epoch_size=25000, upsample=False, seed=42,
+                    device=torch.device('cpu')):
     """ Returns a dataloader that enables larger epochs on small datasets and
         has upsampling functionality.
 
@@ -576,7 +596,7 @@ def get_data_loader(X_in, y_in, batch_size, extended_batch_sampler=True, epoch_s
     # Returns:
         DataLoader.
     """
-    dataset = DeepMojiDataset(X_in, y_in)
+    dataset = DeepMojiDataset(X_in, y_in, device=device)
 
     if extended_batch_sampler:
         batch_sampler = DeepMojiBatchSampler(y_in, batch_size, epoch_size=epoch_size, upsample=upsample, seed=seed)
@@ -584,6 +604,7 @@ def get_data_loader(X_in, y_in, batch_size, extended_batch_sampler=True, epoch_s
         batch_sampler = BatchSampler(SequentialSampler(y_in), batch_size, drop_last=False)
 
     return DataLoader(dataset, batch_sampler=batch_sampler, num_workers=0)
+
 
 class DeepMojiDataset(Dataset):
     """ A simple Dataset class.
@@ -595,12 +616,13 @@ class DeepMojiDataset(Dataset):
     # __getitem__ output:
         (torch.LongTensor, torch.LongTensor)
     """
-    def __init__(self, X_in, y_in):
+
+    def __init__(self, X_in, y_in, device=torch.device('cpu')):
         # Check if we have Torch.LongTensor inputs (assume Numpy array otherwise)
         if not isinstance(X_in, torch.LongTensor):
-            X_in = torch.from_numpy(X_in.astype('int64')).long()
+            X_in = torch.from_numpy(X_in.astype('int64')).long().to(device)
         if not isinstance(y_in, torch.LongTensor):
-            y_in = torch.from_numpy(y_in.astype('int64')).long()
+            y_in = torch.from_numpy(y_in.astype('int64')).long().to(device)
 
         self.X_in = torch.split(X_in, 1, dim=0)
         self.y_in = torch.split(y_in, 1, dim=0)
@@ -610,6 +632,7 @@ class DeepMojiDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.X_in[idx].squeeze(), self.y_in[idx].squeeze()
+
 
 class DeepMojiBatchSampler(object):
     """A Batch sampler that enables larger epochs on small datasets and
@@ -659,12 +682,12 @@ class DeepMojiBatchSampler(object):
             self.sample_ind = concat_ind[p]
 
             label_dist = np.mean(y_in.numpy()[self.sample_ind])
-            assert(label_dist > 0.45)
-            assert(label_dist < 0.55)
+            assert (label_dist > 0.45)
+            assert (label_dist < 0.55)
 
     def __iter__(self):
         # Hand-off data using batch_size
-        for i in range(int(self.epoch_size/self.batch_size)):
+        for i in range(int(self.epoch_size / self.batch_size)):
             start = i * self.batch_size
             end = min(start + self.batch_size, self.epoch_size)
             yield self.sample_ind[start:end]
