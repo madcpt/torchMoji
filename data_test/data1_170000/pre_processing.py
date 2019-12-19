@@ -35,8 +35,8 @@ class origin_dataset(Dataset):
         return len(self.sentences)
     
 if __name__ == "__main__":
-    test_dataset = origin_dataset("dataset.txt", 0, 10000)
-    print(len(test_dataset.vocabulary))
+    test_dataset = origin_dataset("dataset.txt", 0, 10000) # you can set the size of dataset with beign and end
+    print(len(test_dataset.vocabulary)) # vocabulary is with test_set
     train_loader = DataLoader(dataset=test_dataset, batch_size=1, shuffle=False)
     for se, la in train_loader:
         print(se,la)
