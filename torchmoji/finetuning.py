@@ -116,7 +116,7 @@ def calculate_batchsize_maxlen(texts):
     # Adjust batch_size accordingly to prevent GPU overflow
     lengths = [len(tokenize(t)) for t in texts]
     maxlen = roundup(np.percentile(lengths, 80.0))
-    batch_size = 512 if maxlen <= 100 else 50
+    batch_size = 256 if maxlen <= 100 else 50
     # TODO
     return batch_size, maxlen
 

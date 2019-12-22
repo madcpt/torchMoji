@@ -6,6 +6,6 @@ for i in ${!datasets[@]}
 do
     for method in ${methods[*]}
     do
-        echo -m=${method} --dataset=${datasets[$i]} -n=${nb_classes[$i]}
+        python3 examples/finetune.py -m=${method} --dataset=${datasets[$i]} -n=${nb_classes[$i]}
     done
 done
